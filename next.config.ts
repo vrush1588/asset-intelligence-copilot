@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Native module: load it from node_modules at runtime instead of bundling it.
+  serverExternalPackages: ["better-sqlite3"],
+  devIndicators: false,
 };
 
 export default nextConfig;

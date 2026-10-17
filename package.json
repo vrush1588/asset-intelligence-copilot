@@ -6,22 +6,40 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "ingest": "tsx scripts/ingest.ts",
+    "eval": "tsx scripts/eval.ts",
+    "check": "tsx scripts/check-tools.ts",
+    "reset-memory": "tsx scripts/reset-memory.ts",
+    "probe": "tsx scripts/probe.ts",
+    "ask": "tsx scripts/ask.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "check-followups": "tsx scripts/check-followups.ts"
   },
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "leaflet": "^1.9.4",
+    "next": "15.5.4",
+    "openai": "^4.104.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.5.4"
+    "react-leaflet": "^5.0.0",
+    "recharts": "^2.15.4",
+    "supercluster": "^8.0.1"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/leaflet": "^1.9.18",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@tailwindcss/postcss": "^4",
-    "tailwindcss": "^4",
+    "@types/supercluster": "^7.1.3",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
-    "@eslint/eslintrc": "^3"
+    "tailwindcss": "^4",
+    "tsx": "^4.19.4",
+    "typescript": "^5"
   }
 }
