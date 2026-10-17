@@ -12,20 +12,22 @@ npm run ingest -- ../flytbase-ahc-swe-asset-intelligence-dataset/sample-data
 npm run dev            # http://localhost:3000
 ```
 
-Load the test dataset **alongside** the sample by passing both folders:
+**Test dataset.** The test data released for the final questions already contains all 200 sample wells (with newer records), so load it **on its own**:
 
 ```bash
-npm run ingest -- ../flytbase-ahc-swe-asset-intelligence-dataset/sample-data ../test-data
+npm run ingest -- ../flytbase-ahc-swe-asset-intelligence-dataset/test-data/dataset --today 2027-01-15 --fresh-memory
 ```
+
+You can also pass several folders to load them together, e.g. a sample plus a separate set of extra wells.
 
 Each load builds a new database file (`data/copilot-<time>.db`) and then switches `data/active.json` to it. **A running server picks up the new data within a second, with no restart and no failed requests** (tested: 22 questions during two live reloads, 0 failures). Corrections, shared notes, team rules and conversations are carried over unless you pass `--fresh-memory`. The loader ends with a health report: **errors** mean answers could be wrong (e.g. a manual's producing rule couldn't be read) and the exit code is 2; **warnings** need a look. The same report is in the app's sidebar under "Data".
 
 ## When the test dataset arrives (runbook)
 
-1. Unpack it into its own folder, e.g. `../test-data` (it must contain `fleet/` and `assets/`).
-2. Integrity check, about 30 s: `python -I tools/ground_truth_review.py ../test-data`.
-3. Set `COPILOT_TODAY` in `.env.local` to the date the final questions call "today". The app reloads `.env.local` by itself.
-4. Load: `npm run ingest -- ../flytbase-ahc-swe-asset-intelligence-dataset/sample-data ../test-data --fresh-memory`.
+1. Get it: `git pull` in the dataset repo. The data is in `test-data/dataset/` (with `fleet/` and `assets/`), and the questions are in `test-data/final-questions.md`.
+2. Integrity check, about 30 s: `python -I tools/ground_truth_review.py ../flytbase-ahc-swe-asset-intelligence-dataset/test-data/dataset --today 2027-01-15`.
+3. Set `COPILOT_TODAY` in `.env.local` to the date the final questions call "today" (**2027-01-15** for this test set). The app reloads `.env.local` by itself.
+4. Load: `npm run ingest -- ../flytbase-ahc-swe-asset-intelligence-dataset/test-data/dataset --today 2027-01-15 --fresh-memory`.
    - **No errors** → go on.
    - **Error about a well type's producing rule** → read that manual's rule, then either fix the wording pattern in `lib/rules-extract.ts` and reload, or tell the copilot in chat, e.g. "Note for all T500 wells: a well is producing at 18 °C above air".
 5. Smoke test, about 2 s: `npm run smoke`. It picks real wells, areas and spills from the loaded data and asks one question per tool.
@@ -35,7 +37,9 @@ To demo a live reload, keep the app open and run step 4. The sidebar's "Data" li
 
 Model settings are in `.env.local` (see `.env.example`). The default is local Gemma (`gemma3:4b`) through Ollama. `LLM_PROVIDER=none` runs on keyword routing alone.
 
-**Set "today".** `COPILOT_TODAY` in `.env.local` is the date used for "right now", "last 90 days" and deadlines. Set it to the date the question document states (the latest example scenarios say 17 Oct 2026), then restart `npm run dev`. If it is unset, the copilot uses the day after the latest inspection.
+**Set "today".** `COPILOT_TODAY` in `.env.local` is the date used for "right now", "last 90 days" and deadlines. Set it to the date the question document states: **2027-01-15** for the test data, 2026-10-17 for the example scenarios on the sample. The running app picks up the change by itself. If it is unset, the copilot uses the day after the latest inspection.
+
+**The `data/` folder** (never committed) holds `active.json`, which points at the live database `copilot-<time>.db`. Older `copilot-*.db` builds and the `eval.db` / `smoke.db` scratch copies can be deleted anytime. In development, the server can keep an old build open after code edits; if a delete fails, stop `npm run dev`, delete, and start it again.
 
 | Command | What it does |
 |---|---|
@@ -63,7 +67,20 @@ question ─► feedback? ──yes──► parse ─► check against data and
         answer text + visual + citations  (model writes text only for open document questions)
 ```
 
-**Data.** `scripts/ingest.ts` loads every file into SQLite (`data/copilot.db`). It parses the free-text repair reports (containment time, compliance-check table, spill class), splits manuals and SOPs into sections with full-text search (FTS5), and **extracts the numeric rules** from the manuals and SOPs: producing threshold per well type, spill classes, deadlines, RCA trigger. Each rule keeps its document and section for citations. Nothing is hard-coded from the sample questions.
+**Data.** `scripts/ingest.ts` loads every file into SQLite (`data/copilot-<time>.db`). It parses the free-text repair reports (containment time, compliance-check table, spill class), splits manuals and SOPs into sections with full-text search (FTS5), and **extracts the numeric rules** from the manuals and SOPs: producing threshold per well type, spill classes, deadlines, RCA trigger. Each rule keeps its document and section for citations. Nothing is hard-coded from the sample questions.
+
+The loader also stores the fields that are new in the test data. None of them are required, so the sample still loads unchanged:
+
+| New in the test data | Stored as |
+|---|---|
+| `well_type` T500 (`fleet/well-types/T500.md`) | Its producing rule (25 °C) is read from the manual like the others |
+| `status` = `plugged_and_abandoned`, `decommissioned_on` | `wells.status`, `wells.decommissioned_on` |
+| `type_history`, `team_history` | `wells.type_history`, `wells.team_history` (JSON) |
+| `recorded_at` (late-entered records, IDs ending `-B…` / `-L…`) | `inspections.recorded_at`, `maintenance.recorded_at` |
+| `cost_revision` | `maintenance.cost_revision` (JSON); `cost_usd` already holds the revised amounts |
+| `note_type` = `data_correction` (field, original, corrected value) | `notes.field / original_value / corrected_value`, and **applied** as a correction everywhere, with the original kept |
+| Report lines `**Parts installed:**` and `**Follow-up:**` | `reports.parts_model / parts_serial / parts_lot`, `reports.followup_days / followup_text` |
+| New documents in `fleet/sops/` (operations SOP rev 2, recall notice, MOC memos, regulator letter) | Loaded and searchable section by section |
 
 **Effective data.** Every tool reads inspections through one layer (`lib/domain.ts`). That layer applies corrections (keeping the original value), evaluates "producing" against the well type's rule, and resolves rules in the order *override for this well → override for its type → manual*. A correction or team rule therefore changes every later answer, for every user, at exactly its scope.
 
@@ -84,8 +101,23 @@ question ─► feedback? ──yes──► parse ─► check against data and
 
 **Conflicts.** Before storing a claim, the copilot compares it with the latest inspection, the inspector's remark and other notes (including the author's own). A raw-data correction is applied but its conflicts are shown. A status claim that contradicts the data is stored as *unconfirmed* and the user is asked to confirm.
 
+## Status on the test data (15 Jan 2027)
+
+- Loads 600 wells, 125,198 inspections, 17,415 repairs, 4,437 reports, 328 regulator events and 1,887 notes in about 8 s, with no errors. All three producing rules are read from the manuals (T200 15 °C, T350 20 °C, T500 25 °C). `npm run smoke` passes 17/17.
+- **Stored but not yet used in answers:**
+  - status from operator notes (operations SOP OPS-3: the most recent of inspection and operator note decides);
+  - well type at the date of each reading (`type_history`);
+  - excluding plugged wells from "not producing";
+  - recalled pump lots versus installed pumps;
+  - bypass approvals (MOC memos);
+  - the regulator letter's scope;
+  - follow-up deadlines;
+  - reasons for waiting.
+
+  These are what most of `test-data/final-questions.md` asks about. Today, such questions fall back to document search.
+
 ## Results on the sample
 
-- `npm run eval`: 26/26 checks across the 18 scenarios, about 1 s (hybrid routing).
+- `npm run eval`: 26/26 checks across the 18 scenarios, about 1 s (hybrid routing). The eval's expected answers are for the **sample** data, so load the sample before running it (it then runs on a scratch copy).
 - `--router llm` with local `gemma3:4b`: 25/26. The model sent "not contained within the time limit" to the spill list instead of the compliance check; hybrid routing handles it.
 - Local Gemma on CPU takes roughly 10–60 s per model call. Questions the keyword router recognises answer in milliseconds.

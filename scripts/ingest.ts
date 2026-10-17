@@ -64,14 +64,14 @@ const ins = {
   area: d.prepare(`INSERT OR REPLACE INTO areas VALUES (?,?,?,?,?)`),
   team: d.prepare(`INSERT OR REPLACE INTO teams VALUES (?,?,?)`),
   user: d.prepare(`INSERT OR REPLACE INTO users VALUES (?,?,?,?)`),
-  well: d.prepare(`INSERT OR REPLACE INTO wells VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`),
+  well: d.prepare(`INSERT OR REPLACE INTO wells VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   equip: d.prepare(`INSERT OR REPLACE INTO equipment VALUES (?,?,?,?)`),
-  insp: d.prepare(`INSERT OR REPLACE INTO inspections VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`),
-  mnt: d.prepare(`INSERT OR REPLACE INTO maintenance VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
-  report: d.prepare(`INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?,?)`),
+  insp: d.prepare(`INSERT OR REPLACE INTO inspections VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+  mnt: d.prepare(`INSERT OR REPLACE INTO maintenance VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+  report: d.prepare(`INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   check: d.prepare(`INSERT INTO report_checks VALUES (?,?,?,?)`),
   reg: d.prepare(`INSERT OR REPLACE INTO reg_events VALUES (?,?,?,?,?,?,?,?,?,?,?)`),
-  note: d.prepare(`INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?)`),
+  note: d.prepare(`INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`),
   doc: d.prepare(`INSERT OR REPLACE INTO docs VALUES (?,?,?,?,?)`),
   chunk: d.prepare(`INSERT INTO doc_chunks (doc_id, section, text) VALUES (?,?,?)`),
   fts: d.prepare(`INSERT INTO search_fts VALUES (?,?,?,?,?)`),
@@ -86,6 +86,10 @@ function parseReport(text: string) {
   const cont = flat.match(/contained\s+(?:about|after|within|in)?\s*~?(\d+(?:\.\d+)?)\s*(?:h\b|hours?)/i);
   const cls = flat.match(/\((minor|moderate|reportable|major) class\)/i) ?? flat.match(/\b(minor|moderate|reportable|major) spill\b/i);
   const written = flat.match(/Report written:\s*([^\n]+)/i);
+  // Test data: "Parts installed: Highline RP-175 pump, serial SN-702637, lot LOT-2502-C"
+  //            "Follow-up: Crew to return within 14 days to ..."
+  const parts = flat.match(/^Parts installed:\s*(.+)$/im);
+  const follow = flat.match(/^Follow-up:\s*(.+)$/im);
   const checks: { protocol: string; result: string; detail: string }[] = [];
   const sec = flat.split(/^## Compliance check\s*$/m)[1];
   if (sec) {
@@ -100,6 +104,12 @@ function parseReport(text: string) {
     containment_hours: cont ? Number(cont[1]) : null,
     spill_class: cls ? cls[1].toLowerCase() : null,
     report_written: written ? written[1].trim() : null,
+    parts_installed: parts ? parts[1].trim() : null,
+    parts_model: parts ? parts[1].split(",")[0].replace(/\s+pump$/i, "").trim() : null,
+    parts_serial: parts?.[1].match(/serial\s+([\w-]+)/i)?.[1] ?? null,
+    parts_lot: parts?.[1].match(/lot\s+([\w-]+)/i)?.[1] ?? null,
+    followup_days: follow ? Number(follow[1].match(/(\d+)\s*days?/i)?.[1] ?? NaN) || null : null,
+    followup_text: follow ? follow[1].trim() : null,
     checks,
   };
 }
@@ -152,7 +162,12 @@ const load = d.transaction((root: string) => {
     const m = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     ins.well.run(m.asset_id, m.name, m.well_type, m.area_id, m.team_id, m.in_charge_user_id,
       m.location?.lat ?? null, m.location?.lon ?? null, m.installed_on, m.recorded_status,
-      m.last_inspection?.inspection_id ?? null, root);
+      m.last_inspection?.inspection_id ?? null, root,
+      m.status ?? null, m.decommissioned_on ?? null,
+      m.type_history ? JSON.stringify(m.type_history) : null, m.team_history ? JSON.stringify(m.team_history) : null);
+    if (m.status) bump(`wells.${m.status}`);
+    if (m.type_history) bump("wells.type_history");
+    if (m.team_history) bump("wells.team_history");
     bump("wells");
     for (const e of m.equipment ?? []) ins.equip.run(e.equipment_id, m.asset_id, e.kind, e.model);
 
@@ -161,7 +176,8 @@ const load = d.transaction((root: string) => {
     for (const i of inspections) {
       ins.insp.run(i.inspection_id, i.asset_id ?? m.asset_id, i.inspected_at, i.inspector_user_id, i.method,
         i.ambient_temp_c, i.wellhead_temp_c, i.spill_detected ? 1 : 0, i.spill_area_pct,
-        i.spill_est_volume_bbl, JSON.stringify(i.evidence_images ?? []), i.notes ?? "");
+        i.spill_est_volume_bbl, JSON.stringify(i.evidence_images ?? []), i.notes ?? "", i.recorded_at ?? null);
+      if (i.recorded_at) bump("inspections.late_entered");
       byId.set(i.inspection_id, i);
       if (i.inspected_at > maxInspection) maxInspection = i.inspected_at;
       if (i.notes) ins.fts.run("inspection_note", i.inspection_id, m.asset_id, `${i.inspection_id} inspector remark`, i.notes);
@@ -172,14 +188,20 @@ const load = d.transaction((root: string) => {
       ins.mnt.run(r.maintenance_id, r.asset_id ?? m.asset_id, r.started_at, r.completed_at, r.maintenance_type,
         r.equipment_kind, r.issue, r.action_taken, r.technician_user_id, r.contractor, r.downtime_hours,
         r.cost_usd?.labor ?? null, r.cost_usd?.parts ?? null, r.cost_usd?.total ?? null,
-        r.triggered_by_inspection_id, r.report_file);
+        r.triggered_by_inspection_id, r.report_file,
+        r.recorded_at ?? null, r.cost_revision ? JSON.stringify(r.cost_revision) : null);
       bump("maintenance");
+      if (r.recorded_at) bump("maintenance.late_entered");
+      if (r.cost_revision) bump("maintenance.cost_revised");
       if (r.report_file) {
         const p = path.join(wdir, r.report_file);
         if (!fs.existsSync(p)) { bump("missing_report_files"); continue; }
         const text = fs.readFileSync(p, "utf8");
         const pr = parseReport(text);
-        ins.report.run(r.maintenance_id, m.asset_id, `${wid}/${r.report_file}`, text, pr.containment_hours, pr.spill_class, pr.report_written);
+        ins.report.run(r.maintenance_id, m.asset_id, `${wid}/${r.report_file}`, text, pr.containment_hours, pr.spill_class, pr.report_written,
+          pr.parts_installed, pr.parts_model, pr.parts_serial, pr.parts_lot, pr.followup_days, pr.followup_text);
+        if (pr.parts_installed) bump("reports.parts_installed");
+        if (pr.followup_text) bump("reports.follow_up");
         for (const c of pr.checks) ins.check.run(r.maintenance_id, c.protocol, c.result, c.detail);
         ins.fts.run("report", r.maintenance_id, m.asset_id, `Repair report ${r.maintenance_id}: ${r.issue}`, text);
         bump("reports");
@@ -194,9 +216,20 @@ const load = d.transaction((root: string) => {
 
     for (const n of readJsonl(path.join(wdir, "context.jsonl"))) {
       ins.note.run(n.note_id, n.asset_id ?? m.asset_id, n.created_at, n.author_user_id, n.note_type,
-        n.inspection_id ?? null, n.text, n.valid_from, n.valid_to);
+        n.inspection_id ?? null, n.text, n.valid_from, n.valid_to,
+        n.field ?? null, n.original_value ?? null, n.corrected_value ?? null);
       ins.fts.run("note", n.note_id, m.asset_id, `Note ${n.note_id} (${n.note_type})`, n.text);
       bump("notes");
+      // data_correction (test data): one field of one inspection, with both values given.
+      // Stored like any other correction, so every answer applies it.
+      if (n.note_type === "data_correction" && n.inspection_id && n.field) {
+        if (!byId.has(n.inspection_id)) { bump("dangling_corrections"); continue; }
+        const value = n.field === "spill_detected" ? (n.corrected_value ? 1 : 0) : Number(n.corrected_value);
+        ins.corr.run(n.inspection_id, m.asset_id, n.field, n.original_value, value, n.author_user_id,
+          n.text, `note:${n.note_id}`, n.created_at);
+        bump(`data_corrections.${n.field}`);
+        continue;
+      }
       if (n.note_type === "correction" && n.inspection_id) {
         const target = byId.get(n.inspection_id);
         if (!target) { bump("dangling_corrections"); continue; }

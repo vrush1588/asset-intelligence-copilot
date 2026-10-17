@@ -13,24 +13,30 @@ CREATE TABLE users (user_id TEXT PRIMARY KEY, name TEXT, role TEXT, team_id TEXT
 CREATE TABLE wells (
   asset_id TEXT PRIMARY KEY, name TEXT, well_type TEXT, area_id TEXT, team_id TEXT,
   in_charge_user_id TEXT, lat REAL, lon REAL, installed_on TEXT, recorded_status TEXT,
-  last_inspection_id TEXT, source_root TEXT);
+  last_inspection_id TEXT, source_root TEXT,
+  status TEXT, decommissioned_on TEXT,          -- plugged_and_abandoned wells (test data)
+  type_history TEXT, team_history TEXT);        -- JSON [{well_type|team_id, from, to}]
 CREATE TABLE equipment (equipment_id TEXT PRIMARY KEY, asset_id TEXT, kind TEXT, model TEXT);
 CREATE TABLE inspections (
   inspection_id TEXT PRIMARY KEY, asset_id TEXT, inspected_at TEXT, inspector_user_id TEXT,
   method TEXT, ambient_temp_c REAL, wellhead_temp_c REAL, spill_detected INTEGER,
-  spill_area_pct REAL, spill_est_volume_bbl REAL, evidence_images TEXT, notes TEXT);
+  spill_area_pct REAL, spill_est_volume_bbl REAL, evidence_images TEXT, notes TEXT,
+  recorded_at TEXT);                            -- set when the inspection was entered late
 CREATE INDEX ix_ins_asset ON inspections(asset_id, inspected_at);
 CREATE TABLE maintenance (
   maintenance_id TEXT PRIMARY KEY, asset_id TEXT, started_at TEXT, completed_at TEXT,
   maintenance_type TEXT, equipment_kind TEXT, issue TEXT, action_taken TEXT,
   technician_user_id TEXT, contractor TEXT, downtime_hours REAL,
   cost_labor REAL, cost_parts REAL, cost_total REAL,
-  triggered_by_inspection_id TEXT, report_file TEXT);
+  triggered_by_inspection_id TEXT, report_file TEXT,
+  recorded_at TEXT, cost_revision TEXT);        -- late entry; JSON {original_total, revised_on, reason}
 CREATE INDEX ix_mnt_asset ON maintenance(asset_id, started_at);
 CREATE INDEX ix_mnt_trig ON maintenance(triggered_by_inspection_id);
 CREATE TABLE reports (
   maintenance_id TEXT PRIMARY KEY, asset_id TEXT, path TEXT, text TEXT,
-  containment_hours REAL, spill_class TEXT, report_written TEXT);
+  containment_hours REAL, spill_class TEXT, report_written TEXT,
+  parts_installed TEXT, parts_model TEXT, parts_serial TEXT, parts_lot TEXT,
+  followup_days INTEGER, followup_text TEXT);
 CREATE TABLE report_checks (maintenance_id TEXT, protocol TEXT, result TEXT, detail TEXT);
 CREATE INDEX ix_rc_m ON report_checks(maintenance_id);
 CREATE TABLE reg_events (
@@ -39,7 +45,8 @@ CREATE TABLE reg_events (
   fine_usd REAL, status TEXT);
 CREATE TABLE notes (
   note_id TEXT PRIMARY KEY, asset_id TEXT, created_at TEXT, author_user_id TEXT,
-  note_type TEXT, inspection_id TEXT, text TEXT, valid_from TEXT, valid_to TEXT);
+  note_type TEXT, inspection_id TEXT, text TEXT, valid_from TEXT, valid_to TEXT,
+  field TEXT, original_value REAL, corrected_value REAL);   -- data_correction notes
 CREATE TABLE docs (doc_id TEXT PRIMARY KEY, title TEXT, path TEXT, kind TEXT, text TEXT);
 CREATE TABLE doc_chunks (chunk_id INTEGER PRIMARY KEY, doc_id TEXT, section TEXT, text TEXT);
 CREATE VIRTUAL TABLE search_fts USING fts5(ref_type, ref_id, asset_id, title, body, tokenize='porter');
