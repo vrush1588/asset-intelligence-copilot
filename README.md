@@ -52,6 +52,12 @@ Model settings are in `.env.local` (see `.env.example`). The default is local Ge
 | `python -I tools/ground_truth_review.py <dataset> [--today D]` | Independent integrity check of any dataset |
 | `python -I tools/ground_truth_answers.py <dataset> [--today D]` | Independent Python recomputation of the sample's expected answers |
 
+## See it in action
+
+One scenario on the test data, step by step with screenshots: [images/README.md](images/README.md). It covers wells not producing, a map view, sources, a correction with a conflict warning, shared and private memory, and a 7-area spill heatmap.
+
+![Michael's correction is applied and the conflicting inspector remark is shown](images/06-correction-with-conflict.png)
+
 ## How it works
 
 **Numbers come from code over one SQLite file; the model only routes.**
