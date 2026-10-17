@@ -54,18 +54,43 @@ Model settings are in `.env.local` (see `.env.example`). The default is local Ge
 
 ## How it works
 
+**Numbers come from code over one SQLite file; the model only routes.**
+
+```mermaid
+flowchart LR
+    subgraph LOAD["Load: once per dataset, about 8 s"]
+        direction LR
+        DS["<b>Dataset folders</b><br/>fleet/ + assets/<br/>sample or test data"]
+        LD["<b>Loader</b><br/>parse reports, extract rules<br/>health report, live switch"]
+        DB[("<b>SQLite, one file</b><br/>records, rules with sources, FTS5 docs<br/>corrections, notes, team rules, memory")]
+        DS --> LD --> DB
+    end
+
+    subgraph ASK["Ask: per question"]
+        direction LR
+        Q["<b>Question</b><br/>chat, as a user"]
+        FB{"Feedback?"}
+        MEM["<b>Memory</b><br/>'wells we discussed'<br/>this user's history only"]
+        RT["<b>Router</b><br/>keyword rules first,<br/>Gemma if unsure"]
+        TL["<b>14 tools</b><br/>deterministic code"]
+        AN["<b>Answer</b><br/>text, visuals, sources,<br/>follow-up chips"]
+        Q --> FB
+        FB -- no --> MEM --> RT --> TL --> AN
+    end
+
+    FB -- "yes: correction, note, team rule" --> CC["<b>Conflict check</b><br/>vs latest inspection,<br/>inspector remark, other notes"]
+    CC -- "stored, shared with everyone" --> DB
+    TL -- "reads records + rules" --> DB
+
+    classDef store fill:#e8f0fe,stroke:#1f6feb,stroke-width:2px,color:#111;
+    class DB store;
 ```
-question ─► feedback? ──yes──► parse ─► check against data and other people's notes ─► store (shared)
-              │no
-              ▼
-        "wells we discussed"? ─► this user's own conversation history only
-              ▼
-        route: keyword router (confident) ─or─ model picks tool + args ─► validate args
-              ▼
-        deterministic tool over SQLite (corrections, overrides and rules applied)
-              ▼
-        answer text + visual + citations  (model writes text only for open document questions)
-```
+
+1. **Load.** The loader reads one or more dataset folders into a new SQLite file, then the running app switches to it.
+2. **Feedback** (a correction, a shared note, a team rule) is checked against the data and other people's notes before it is stored. Conflicts are shown, never hidden.
+3. **Memory.** "The wells we discussed" is answered from that user's own conversations only.
+4. **Router.** Picks one of 14 tools and its arguments: keyword rules when they are sure, otherwise the local Gemma model. Model arguments are validated, and values found in the question's text win.
+5. **Tools** compute the answer from SQLite, with corrections, team rules and manual rules applied. The model writes text only for open questions over documents.
 
 **Data.** `scripts/ingest.ts` loads every file into SQLite (`data/copilot-<time>.db`). It parses the free-text repair reports (containment time, compliance-check table, spill class), splits manuals and SOPs into sections with full-text search (FTS5), and **extracts the numeric rules** from the manuals and SOPs: producing threshold per well type, spill classes, deadlines, RCA trigger. Each rule keeps its document and section for citations. Nothing is hard-coded from the sample questions.
 
